@@ -16,7 +16,7 @@ public class Tdb2Transaction implements ASquareTransaction {
 
   private static final Logger log = LoggerFactory.getLogger(Tdb2Transaction.class);
   private final Dataset dataset;
-  private ThreadLocal<ASquareTransactionType> currentTransactionInThread = new ThreadLocal<>();
+  private final ThreadLocal<ASquareTransactionType> currentTransactionInThread = new ThreadLocal<>();
 
   public Tdb2Transaction(Dataset dataset) {
     this.dataset = dataset;
@@ -29,7 +29,14 @@ public class Tdb2Transaction implements ASquareTransaction {
       currentTransactionInThread.set(READ);
     }
     else {
-      return read.get();
+      if (dataset.isInTransaction()) {
+        return read.get();
+      }
+      else {
+        resetCurrentTransactionInThread();
+        throw new IllegalStateException("Obsolete transaction state: " + parentType.name() +
+                                        " from thread: " + Thread.currentThread().getName());
+      }
     }
 
     T t;
@@ -43,7 +50,7 @@ public class Tdb2Transaction implements ASquareTransaction {
       throw e;
     }
     finally {
-      currentTransactionInThread.set(null);
+      resetCurrentTransactionInThread();
     }
 
     dataset.end();
@@ -56,11 +63,20 @@ public class Tdb2Transaction implements ASquareTransaction {
     if (parentType == null) {
       currentTransactionInThread.set(WRITE);
     }
-    else if (parentType == READ) {
-      throw new IllegalStateException("WRITE transaction was nested inside READ transaction");
-    }
     else {
-      return write.get();
+      if (dataset.isInTransaction()) {
+        if (parentType == READ) {
+          throw new IllegalStateException("WRITE transaction was nested inside READ transaction");
+        }
+        else {
+          return write.get();
+        }
+      }
+      else {
+        resetCurrentTransactionInThread();
+        throw new IllegalStateException("Obsolete transaction state: " + parentType.name() +
+                                        " from thread: " + Thread.currentThread().getName());
+      }
     }
 
     T t;
@@ -74,10 +90,14 @@ public class Tdb2Transaction implements ASquareTransaction {
       throw e;
     }
     finally {
-      currentTransactionInThread.set(null);
+      resetCurrentTransactionInThread();
     }
 
     dataset.commit();
     return t;
+  }
+
+  private void resetCurrentTransactionInThread() {
+    currentTransactionInThread.set(null);
   }
 }
